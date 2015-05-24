@@ -198,6 +198,37 @@ unsigned char cmdGetByte() {
   return rval;
 }
 
+void sendPacketUart() {
+  Packet *packet;
+  unsigned char rval = 0;
+  if (packetCount > 0)
+  {
+    packet = &packets[packetTailIdx];
+    if (!sendingPacket) {
+      bufferReadPos = packet->dataStartIdx;
+      currentPacketBytesRemaining = packet->length;
+      sendingPacket = TRUE;
+    }
+    while(currentPacketBytesRemaining > 0) {
+      uartTxSendByte(dataBuffer[bufferReadPos++]);
+      currentPacketBytesRemaining--;
+      if (currentPacketBytesRemaining == 0) {
+        // Done sending packet
+        sendingPacket = FALSE;
+        packetCount--;
+        packetTailIdx++;
+        if (packetTailIdx == MAX_PACKETS) {
+          packetTailIdx = 0;
+        }
+      }
+      if (bufferReadPos == BUFFER_SIZE) {
+        bufferReadPos = 0;
+      }
+      dataBufferBytesUsed--;
+    }
+  }
+}
+
 void doCommand(unsigned char cmd) {
   lastCmd = cmd;
   switch (cmd) {
@@ -372,6 +403,9 @@ void finishIncomingPacket() {
     }
     packets[packetHeadIdx].dataStartIdx = bufferWritePos;
     packets[packetHeadIdx].length = 0;
+
+//TODO: get rid of this, this is just a test!
+    sendPacketUart();
   }
 
   // Reset symbol processing state
@@ -390,7 +424,7 @@ void receiveRadioSymbol(unsigned char value) {
   unsigned char symbol;
   unsigned char outputSymbol;
   //printf("receiveRadioSymbol %d\n", value);
-  uartTxSendByte(value);
+  /*uartTxSendByte(value);*/
 
   if (value == 0) {
     if (packets[packetHeadIdx].length > 0) {
