@@ -390,7 +390,7 @@ void receiveRadioSymbol(unsigned char value) {
   unsigned char symbol;
   unsigned char outputSymbol;
   //printf("receiveRadioSymbol %d\n", value);
-  uartTxSendByte(0x15);
+  uartTxSendByte(value);
 
   if (value == 0) {
     if (packets[packetHeadIdx].length > 0) {
