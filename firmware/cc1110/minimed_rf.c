@@ -4,6 +4,7 @@
  * to make sure spi is synced */
 
  #include "minimed_rf.h"
+ #include "cc1110_uart.c"
 
 #ifdef __GNUC__
 #define XDATA(x)
@@ -120,6 +121,18 @@ unsigned char XDATA(0xf5a8) radioOutputBuffer[256];
 unsigned char XDATA(0xf572) symbolTable[] = {16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 11, 16, 13, 14, 16, 16, 16, 16, 16, 16, 0, 7, 16, 16, 9, 8, 16, 15, 16, 16, 16, 16, 16, 16, 3, 16, 5, 6, 16, 16, 16, 10, 16, 12, 16, 16, 16, 16, 1, 2, 16, 4};
 
 int symbolInputBuffer = 0;
+void configureUart() {
+    uartSetUartNum(0);
+    uartSetStart(0);
+    uartSetStop(0);
+    uartSetSbp(0);
+    uartSetParity(0);
+    uartSetBit9(0);
+    uartSetD9(0);
+    uartSetFlow(0);
+    uartSetOrder(0);
+    uartInit(9800);
+}
 void initMinimedRF() {
 
   // init crc table
@@ -144,6 +157,7 @@ void initMinimedRF() {
   packets[0].dataStartIdx = 0;
   packets[0].length = 0;
 
+  configureUart();
   setChannel(2);
 }
 
@@ -376,6 +390,7 @@ void receiveRadioSymbol(unsigned char value) {
   unsigned char symbol;
   unsigned char outputSymbol;
   //printf("receiveRadioSymbol %d\n", value);
+  uartTxSendByte(0x15);
 
   if (value == 0) {
     if (packets[packetHeadIdx].length > 0) {
