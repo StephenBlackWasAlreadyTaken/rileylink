@@ -3,32 +3,12 @@
 /* Note: must issue software reset (command = 4) before transferring data
  * to make sure spi is synced */
 
- #include "minimed_rf.h"
- #include "cc1110_uart.c"
+#include "minimed_rf.h"
 
 #ifdef __GNUC__
 #define XDATA(x)
 #else
 #define XDATA(x) __xdata __at x
-#endif
-
-#ifdef MOCK_RADIO
-
-#include <stdio.h>
-unsigned char U1DBUF;
-unsigned char CHANNR;
-unsigned char P0_0;
-unsigned char P1_0;
-unsigned char P1_1;
-unsigned char EA;
-unsigned char WDCTL;
-unsigned char RFTXRXIE;
-unsigned char MARCSTATE;
-unsigned char RFIF;
-unsigned char RFD;
-unsigned char S1CON;
-unsigned char SLEEP;
-
 #endif
 
 unsigned char lastCmd = CMD_NOP;
@@ -37,7 +17,8 @@ unsigned char lastCmd = CMD_NOP;
 #define SPI_MODE_CMD  0
 #define SPI_MODE_ARG  1
 #define SPI_MODE_READ 2
-unsigned char spiMode = SPI_MODE_CMD;
+/*unsigned char spiMode = SPI_MODE_CMD;*/
+unsigned char spiMode = SPI_MODE_READ;
 
 // Errors
 #define ERROR_DATA_BUFFER_OVERFLOW 0x50
@@ -81,6 +62,7 @@ typedef struct Packet {
   unsigned char packetNumber;
 } Packet;
 
+
 int packetCount = 0;
 int packetHeadIdx = 0;
 int packetTailIdx = 0;
@@ -120,19 +102,261 @@ unsigned char XDATA(0xf5a8) radioOutputBuffer[256];
 // Symbol decoding - 53 bytes + 1 pad 
 unsigned char XDATA(0xf572) symbolTable[] = {16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 11, 16, 13, 14, 16, 16, 16, 16, 16, 16, 0, 7, 16, 16, 9, 8, 16, 15, 16, 16, 16, 16, 16, 16, 3, 16, 5, 6, 16, 16, 16, 10, 16, 12, 16, 16, 16, 16, 1, 2, 16, 4};
 
-int symbolInputBuffer = 0;
-void configureUart() {
-    uartSetUartNum(0);
+
+
+
+#define u8 unsigned char
+#define u16 unsigned int
+#define u32 unsigned long
+#define uint8 unsigned char
+#define uint8_t unsigned char
+#define uint16 unsigned int
+#define uint16_t unsigned int
+#define uint32 unsigned long
+#define uchar unsigned char
+#define xdata __xdata
+#define _PRAGMA(x) _Pragma(#x)
+#define interrupt __interrupt
+
+#define UART1_TX_ISR_VECTOR 0x73
+#define UART1_RX_ISR_VECTOR 0x1B
+
+#define SIZE_OF_UART_RX_BUFFER 256
+#define SIZE_OF_UART_TX_BUFFER 256
+
+#define UART_BAUD_M 131
+#define UART_BAUD_E 8
+
+/*typedef struct IncomingUartPayload {*/
+  /*int dataStartIdx;*/
+  /*unsigned char length;*/
+  /*unsigned char packetNumber;*/
+/*}*/
+/*typedef struct IncomingUartMessage {*/
+  /*int dataStartIdx;*/
+  /*int id;*/
+  /*unsigned char length;*/
+  /*unsigned char packetNumber;*/
+/*}*/
+unsigned char __xdata uartRxBuffer[SIZE_OF_UART_RX_BUFFER];
+unsigned char __xdata uartTxBuffer[SIZE_OF_UART_TX_BUFFER];
+unsigned short __xdata uartRxIndex, uartTxIndex;
+unsigned short __xdata uartRxInterruptIndex, uartTxInterruptIndex;
+/*IncomingUartPayload __xdata incomingUartPayloads[MAX_PACKETS];*/
+/*IncomingUartMessage __xdata incomingUartMessages[MAX_PACKETS];*/
+unsigned char currentIncomingMessage;
+unsigned char currentIncomingPayload;
+unsigned char lastProcessedPayload;
+
+void uartMapPort(unsigned char uartPortAlt) {
+    if(uartPortAlt == 1) {
+        PERCFG &= ~0x02; //rx = 5, tx = 4
+        P0SEL |= 0x3C;
+        P1SEL &= ~0xF0;
+    } else {
+        PERCFG |= 0x02; //rx = 7, tx = 6
+        P1SEL |= 0xF0;
+        P0SEL &= ~0x3C;
+    }
+}
+
+
+void setBaudUartBaud() { // 9600, to adjust just change UART_BAUD_M and UART_BAUD_E
+    /*CLKCON &= 0x80;*/
+    /*while(CLKCON & 0x40);*/
+    /*SLEEP |= 0x04;*/
+    U0BAUD = UART_BAUD_M;
+    U0GCR = (U0GCR&~0x1F) | UART_BAUD_E;
+}
+
+typedef struct {
+    uint8 START : 1; // Start bit level (low/high)
+    // Start bit level = low => Idle level = high (U0UCR.START = 0)
+    // Start bit level = high => Idle level = low (U0UCR.START = 1)
+    uint8 STOP : 1; // Stop bit level (low/high)
+    // Stop bit level = high (U0UCR.STOP = 1)
+    // Stop bit level = low (U0UCR.STOP = 0)
+    uint8 SPB : 1; // Stop bits (0 => 1, 1 => 2)
+    // Number of stop bits = 1 (U0UCR.SPB = 0)
+    // Number of stop bits = 2 (U0UCR.SPB = 1)
+    uint8 PARITY : 1; // Parity control (enable/disable)
+    // Parity = disabled (U0UCR.PARITY = 0)
+    // Parity = enabled (U0UCR.PARITY = 1)
+    uint8 BIT9 : 1; // 9 bit enable (8bit / 9bit)
+    // 9-bit data disable = 8 bits transfer (U0UCR.BIT9 = 0)
+    // 9-bit data enable = 9 bits transfer (U0UCR.BIT9 = 1)
+    uint8 D9 : 1; // 9th bit level or Parity type
+    // Level of bit 9 = 0 (U0UCR.D9 = 0), used when U0UCR.BIT9 = 1
+    // Level of bit 9 = 1 (U0UCR.D9 = 1), used when U0UCR.BIT9 = 1
+    // Parity = Even (U0UCR.D9 = 0), used when U0UCR.PARITY = 1
+    // Parity = Odd (U0UCR.D9 = 1), used when U0UCR.PARITY = 1
+    uint8 FLOW : 1; // HW Flow Control (enable/disable)
+    // Flow control = disabled (U0UCR.FLOW = 0)
+    // Flow control = enabled (U0UCR.FLOW = 1)
+    uint8 ORDER : 1; // Data bit order(LSB/MSB first)
+    // Bit order = MSB first (U0GCR.ORDER = 1)
+    // Bit order = LSB first (U0GCR.ORDER = 0) => For PC/Hyperterminal
+} UART_PROT_CONFIG;
+UART_PROT_CONFIG __xdata defaultUartProtConfig;
+
+void uartSetStart(uint8 start) {
+    defaultUartProtConfig.START = start;
+}
+void uartSetStop(uint8 stop) {
+    defaultUartProtConfig.STOP = stop;
+}
+void uartSetSbp(uint8 sbp) {
+    defaultUartProtConfig.SPB = sbp;
+}
+void uartSetParity(uint8 parity) {
+    defaultUartProtConfig.PARITY = parity;
+}
+void uartSetBit9(uint8 bit9) {
+    defaultUartProtConfig.BIT9 = bit9;
+}
+void uartSetD9(uint8 d9) {
+    defaultUartProtConfig.D9 = d9;
+}
+void uartSetFlow(uint8 flow) {
+    defaultUartProtConfig.FLOW = flow;
+}
+void uartSetOrder(uint8 order) {
+    defaultUartProtConfig.ORDER = order;
+}
+
+void uartInitProtocol(UART_PROT_CONFIG* uartProtConfig) {
+    U1CSR |= 0x80;
+    U1UCR = (U1UCR&~0x01) | uartProtConfig->START;
+    U1UCR = (U1UCR&~0x02) | (uartProtConfig->STOP << 1);
+    U1UCR = (U1UCR&~0x04) | (uartProtConfig->SPB << 2);
+    U1UCR = (U1UCR&~0x08) | (uartProtConfig->PARITY << 3);
+    U1UCR = (U1UCR&~0x10) | (uartProtConfig->BIT9 << 4);
+    U1UCR = (U1UCR&~0x20) | (uartProtConfig->D9 << 5);
+    U1UCR = (U1UCR&~0x40) | (uartProtConfig->FLOW << 6);
+    U1GCR = (U1GCR&~0x20) | (uartProtConfig->ORDER << 5);
+}
+
+void uartStartTxForIsr() {
+    uartTxIndex = 1;
+    UTX1IF = 0;
+    IEN2 |= 0x08;
+    U1DBUF = uartTxBuffer[0];
+    IEN0 |= 0x80;
+}
+
+void UART1_TX_ISR( void ) __interrupt( UART1_TX_ISR_VECTOR ) {
+    UTX1IF = 0;
+    if (uartTxIndex > uartTxInterruptIndex) {
+        uartTxIndex = 0;
+        uartTxInterruptIndex = 0;
+        IEN2 &= ~0x08;
+        return;
+    }
+    U1DBUF = uartTxBuffer[uartTxIndex++];
+}
+
+void uartStartRxForIsr() {
+    uartRxIndex = 0;
+    uartRxInterruptIndex = 0;
+    URX1IF = 0;
+    U1CSR |= 0x40;
+    IEN0 |= 0x08;
+    IEN0 |= 0x80;
+}
+
+
+/*unsigned char __xdata messageBuffer[256];*/
+/*unsigned char __xdata payloadBuffer[256];*/
+/*unsigned char __xdata waitingForNewPacket = 1;*/
+/*unsigned char __xdata currentPayloadIdentifier;*/
+
+void UART1_RX_ISR( void ) __interrupt( UART1_RX_ISR_VECTOR ) {
+    //Payload is comprised of multiple messages
+    //Payloads are created once messages are completely received
+    //Acks need to be sent before a next message can be received
+    //a message is considered complete when 20 bytes or a full message queue is built 
+    //    (when payload size == difference between message buffer index and current message buffer index)
+    
+    /*URX1IF = 0;*/
+    /*if(waitingForNewPacket) {*/
+        /*currentIncomingPayload = U1DBUF;*/
+        /*Payloads[currentIncomingPayload].dataStartIdx = currentPayloadWriteIndex;*/
+        /*Payloads[currentIncomingPayload].size = 0;*/
+        /*Payloads[currentIncomingPayload].messagesSize = 0;*/
+        /*waitingForNewPacket = 0;*/
+    /*} else if(!waitingForNewPacket) {*/
+
+    /*}*/
+
+        /*IncomingUartPayload payload;*/
+        /*payload.dataStartIdx = currentPayloadWriteIndex++;*/
+        /*IncomingUartMessage message;*/
+        /*message.dataStartIdx = currentMessageWriteIndex++;*/
+        /*message.id = U1DBUF;*/
+        
+    /*}*/
+    uartRxBuffer[uartRxIndex++] = U1DBUF;
+    if (uartRxIndex >= SIZE_OF_UART_RX_BUFFER) {
+        uartRxIndex = 0; IEN0 &= ~0x08;
+    }
+}
+
+uint8 uartTxAvailable() {
+    if(uartTxInterruptIndex) {
+        return 1;
+    } else {
+        return 0;
+    }
+}
+
+void uartTx(uint8 __xdata buffer[], uint8 size){
+    uint8 position = 0;
+    uartTxInterruptIndex = size - 1;
+    while (position < size) {
+        uartTxBuffer[position] = buffer[position];
+        position++;
+    }
+    uartStartTxForIsr();
+}
+
+void uartTxSendByte(uint8 byte) {
+    uartTxInterruptIndex = 0;
+    uartTxBuffer[0] = byte;
+    uartStartTxForIsr();
+}
+
+uint8 uartNRxReceiveByte() {
+    uint8 byte = uartRxBuffer[uartRxIndex];
+    uartRxIndex++;
+    if(uartRxIndex > uartRxInterruptIndex){
+        uartRxInterruptIndex = 0;
+        uartRxIndex = 0;
+    }
+    return byte;
+}
+
+void uartInit() {
+    setBaudUartBaud();
+    uartMapPort(2); // specify alt pin location (1 or 2)
+    uartInitProtocol(&defaultUartProtConfig);
+    /*uartStartRxForIsr();*/
+}
+
+void initUart() {
     uartSetStart(0);
-    uartSetStop(0);
+    uartSetStop(1);
     uartSetSbp(0);
     uartSetParity(0);
     uartSetBit9(0);
     uartSetD9(0);
     uartSetFlow(0);
-    uartSetOrder(0);
-    uartInit(9800);
+    uartSetOrder(1);
+    uartInit();
 }
+
+
+//RF RELATED
+int symbolInputBuffer = 0;
 void initMinimedRF() {
 
   // init crc table
@@ -156,8 +380,6 @@ void initMinimedRF() {
   // Initialize first packet
   packets[0].dataStartIdx = 0;
   packets[0].length = 0;
-
-  configureUart();
   setChannel(2);
 }
 
@@ -321,8 +543,8 @@ void handleRX1() {
     radioOutputBuffer[radioOutputBufferWritePos++] = U1DBUF;
     if (radioOutputBufferWritePos == radioOutputDataLength) {
       radioOutputBufferReadPos = 0;
-      // Set radio mode to tx;
-      radioMode = RADIO_MODE_TX;
+       /*Set radio mode to tx;*/
+      /*radioMode = RADIO_MODE_TX;*/
       RFTXRXIE = 0;
     }
   }
@@ -424,8 +646,7 @@ void receiveRadioSymbol(unsigned char value) {
   unsigned char symbol;
   unsigned char outputSymbol;
   //printf("receiveRadioSymbol %d\n", value);
-  /*uartTxSendByte(value);*/
-
+  uartTxSendByte(value);
   if (value == 0) {
     if (packets[packetHeadIdx].length > 0) {
       finishIncomingPacket();
@@ -471,11 +692,12 @@ void handleRFTXRX() {
       radioOutputBufferWritePos = 0;
       radioOutputBufferReadPos = 0;
       radioOutputDataLength = 0;
-      radioMode = RADIO_MODE_IDLE;
+      /*radioMode = RADIO_MODE_IDLE;*/
       RFTXRXIE = 0;
     }
     break;
   }
+  uartTxSendByte(1);
 }
 
 void handleRF()

@@ -8,6 +8,11 @@ void handleRFTXRX();
 void handleRF();
 void setChannel(unsigned char newChannel);
 
+//UART related functions
+//
+void initUart();
+void uartTxSendByte(unsigned char byte);
+
 // Commands
 #define CMD_NOP 0
 #define CMD_GET_CHANNEL 1

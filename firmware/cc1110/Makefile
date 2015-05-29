@@ -3,12 +3,14 @@ default: minimed_rf
 
 output/main.rel: main.c 
 	sdcc -I. -c main.c -o output/
+#output/cc1110_uart.rel: cc1110_uart.c
+	#sdcc -I. -c cc1110_uart.c -o output/
 output/minimed_rf.rel: minimed_rf.c minimed_rf.h
 	sdcc -I. -c minimed_rf.c -o output/
 output/minimed_rf.hex: output/minimed_rf.rel output/main.rel
 	sdcc -I. output/minimed_rf.rel output/main.rel -o output/minimed_rf.hex
 minimed_rf: output/minimed_rf.hex
-	cc-tool --log install.log -ew output/minimed_rf.hex
+	cp output/minimed_rf.hex output/application.hex
 
 test_bin: test.c
 	gcc -g -o output/test test.c

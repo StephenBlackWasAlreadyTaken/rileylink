@@ -4,10 +4,6 @@
 #include "ioCCxx10_bitdef.h"
 #include "minimed_rf.h"
 
-// These values will give a baud rate of approx. 62.5kbps for 26 MHz clock
-#define SPI_BAUD_M 59
-#define SPI_BAUD_E 11
-
 #define BIT0 0x1
 #define BIT1 0x2
 #define BIT2 0x4
@@ -17,58 +13,8 @@
 #define BIT6 0x40
 #define BIT7 0x80
 
-void configureSPI(void)
-{
-    /***************************************************************************
-     * Setup I/O ports
-     *
-     * Port and pins used by USART1 operating in SPI-mode are
-     * (SS): P1_4
-     *  (C): P1_5
-     * (MO): P1_6
-     * (MI): P1_7
-     *
-     * These pins can be set to function as peripheral I/O to be be used by
-     * USART1 SPI. Note however, when SPI is in master mode, only MOSI, MISO,
-     * and SCK should be configured as peripheral I/O's. If the external
-     * slave device requires a slave select signal (SSN), then the master
-     * can control the external SSN by using one of its GPIO pin as output.
-     */
-
-    // configure USART1 for Alternative 2 => Port P1 (PERCFG.U1CFG = 1)
-    // To avoid potential I/O conflict with USART0:
-    // Configure USART0 for Alternative 1 => Port P0 (PERCFG.U0CFG = 0)
-    PERCFG = (PERCFG & ~PERCFG_U0CFG) | PERCFG_U1CFG;
-
-    // Give priority to USART 1 over USART 0 for port 0 pins
-    P2DIR = 0x01;
-
-    // Set pins 2, 3 and 5 as peripheral I/O and pin 4 as GPIO output
-    P1SEL = P1SEL | BIT4 | BIT5 | BIT6 | BIT7;
-    P1DIR = P1DIR & ~(BIT4 | BIT5 | BIT6 | BIT7);
-
-    /***************************************************************************
-     * Configure SPI
-     */
-
-    // Set USART to SPI mode and Slave mode
-    U1CSR = (U1CSR & ~U1CSR_MODE) | U1CSR_SLAVE;
-
-    // Set:
-    // - mantissa value
-    // - exponent value
-    // - clock phase to be centered on first edge of SCK period
-    // - negative clock polarity (SCK low when idle)
-    // - bit order for transfers to LSB first
-    U1BAUD = SPI_BAUD_M;
-    U1GCR = (U1GCR & ~(U1GCR_BAUD_E | U1GCR_CPOL | U1GCR_CPHA | U1GCR_ORDER))
-        | SPI_BAUD_E;
-
-}
-
 void configureRadio() 
 {
-  /* RF settings SoC: CC1110 */
   SYNC1     = 0xFF; // sync word, high byte
   SYNC0     = 0x00; // sync word, low byte
   PKTLEN    = 0xFE; // packet length
@@ -114,11 +60,13 @@ void rf_interrupt(void) __interrupt RF_VECTOR
 
 int main(void)
 {
+  unsigned long testx = 0;
   // init LEDS
-  P0DIR |= 0x03;
-  P0_0 = 1; // Red
-  P0_1 = 0; // Blue
+  /*P0DIR |= 0x03;*/
+  /*P0_0 = 1; // Red*/
+  /*P0_1 = 0; // Blue*/
 
+  P1DIR |= 3;
   // Set the system clock source to HS XOSC and max CPU speed,
   // ref. [clk]=>[clk_xosc.c]
   SLEEP &= ~SLEEP_OSC_PD;
@@ -127,19 +75,33 @@ int main(void)
   while (CLKCON & CLKCON_OSC);
   SLEEP |= SLEEP_OSC_PD;
 
-  configureSPI();
+  /*configureSPI();*/
   configureRadio();
 
   initMinimedRF();
 
-  TCON &= ~BIT3; // Clear URX1IFj
+  /*TCON &= ~BIT3; // Clear URX1IFj*/
   URX1IE = 1;    // Enable URX1IE interrupt
 
   // Global interrupt enable
   EA = 1;
 
+  // start in rx Mode
+  radioMode = RADIO_MODE_RX;
+  initUart();
+
   while (1) {
     // Reset radio
+    testx++;
+    if(testx % 1000 == 0){
+          P0DIR |= 0x03;
+        uartTxSendByte(0x02);
+    }
+    if(testx % 5000 == 0){
+          P1DIR |= 3;
+          P0DIR |= 0x03;
+        uartTxSendByte(0x04);
+    }
     RFST = RFST_SIDLE;
     while((MARCSTATE & MARCSTATE_MARC_STATE) != MARC_STATE_IDLE);
 
